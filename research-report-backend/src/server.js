@@ -1,10 +1,23 @@
+require("dotenv").config();
 const app = require("./app");
-const { serviceAccount } = require("./firestore/init");
-const { PORT, AZURE_ENDPOINT, AZURE_KEY, SALES_TOP_K, PER_ARTICLE_MAX_TOKENS, FINAL_MAX_COMPLETION_TOKENS } = require("./config/env");
+
+const { admin } = require("./firestore/init");
+
+const PORT = process.env.PORT || 4000;
+
+// Azure env checks
+const AZURE_OPENAI_ENDPOINT = process.env.AZURE_ENDPOINT;
+const AZURE_OPENAI_API_KEY = process.env.AZURE_KEY;
+const AZURE_OPENAI_DEPLOYMENT = process.env.AZURE_DEPLOYMENT_NAME || "gpt-5-mini";
+
+// Google env checks
+const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI } = process.env;
 
 app.listen(PORT, () => {
-  console.log(`Hybrid Research Agent listening on port ${PORT}`);
-  try { console.log("Firebase project_id=", serviceAccount.project_id); } catch {}
-  console.log("Azure endpoint present:", !!AZURE_ENDPOINT, "Azure key present:", !!AZURE_KEY);
-  console.log("SALES_TOP_K:", SALES_TOP_K, "PER_ARTICLE_MAX_TOKENS:", PER_ARTICLE_MAX_TOKENS, "FINAL_MAX_COMPLETION_TOKENS:", FINAL_MAX_COMPLETION_TOKENS);
+  console.log(`\n🚀 Research Agent backend running on port ${PORT}`);
+  console.log(`Firebase project_id = ${admin.app().options.credential.projectId || "unknown"}`);
+
+  console.log(`Azure endpoint present: ${!!AZURE_OPENAI_ENDPOINT}  key present: ${!!AZURE_OPENAI_API_KEY}  deployment: ${AZURE_OPENAI_DEPLOYMENT}`);
+  console.log(`Google OAuth configured: ${!!GOOGLE_CLIENT_ID && !!GOOGLE_CLIENT_SECRET && !!GOOGLE_REDIRECT_URI}`);
+
 });
