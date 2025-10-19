@@ -12,6 +12,7 @@ const config = {
 
   // News
   NEWSAPI_KEY: process.env.NEWSAPI_KEY || "",
+  NEWS_LANGUAGE: (process.env.NEWS_LANGUAGE || "en").toLowerCase(),
 
   // Pipeline knobs
   SALES_TOP_K: parseInt(process.env.SALES_TOP_K || "3", 10),

@@ -10,7 +10,10 @@ const emailRoute = require("./routes/email");
 const calendarRoute = require("./routes/calendar");
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: ['http://localhost:8081', 'http://127.0.0.1:8081'],
+  credentials: true
+}));
 app.use(express.json({ limit: "10mb" }));
 
 app.use("/health", healthRoute);

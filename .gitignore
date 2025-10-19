@@ -1,0 +1,17 @@
+# Node modules & builds
+node_modules/
+dist/
+build/
+.expo/
+.expo-shared/
+
+# Environment files
+*.env
+.env.local
+google_token.json
+serviceAccountKey.json
+
+# System/IDE files
+.DS_Store
+.vscode/
+.idea/

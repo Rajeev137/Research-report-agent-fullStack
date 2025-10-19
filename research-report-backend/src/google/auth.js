@@ -39,7 +39,9 @@ function getAuthUrl(scopes = [
   "https://www.googleapis.com/auth/drive",
   "https://www.googleapis.com/auth/presentations",
   "https://www.googleapis.com/auth/gmail.send",
-  "https://www.googleapis.com/auth/calendar.events"
+  "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/userinfo.profile",
+  "https://www.googleapis.com/auth/userinfo.email",
 ]) {
   const oauth2Client = getOAuth2Client();
   return oauth2Client.generateAuthUrl({

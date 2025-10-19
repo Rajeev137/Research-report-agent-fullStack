@@ -93,6 +93,37 @@ function forceFillSummary(article, companyName, objIn) {
 }
 
 // -------------------- route --------------------
+// ================= READ-BY-ID via GET /api/research?reportId=... =================
+router.get("/", async (req, res) => {
+  try {
+    const { reportId } = req.query || {};
+    if (!reportId) {
+      // If no reportId is provided, just DO NOTHING here
+      // We will let POST "/" handle generation logic.
+      return res.status(400).json({ error: "missing_reportId" });
+    }
+
+    const snap = await db.collection("reports").doc(String(reportId)).get();
+    if (!snap.exists) {
+      return res.status(404).json({ error: "report_not_found", reportId });
+    }
+
+    // Normalize response shape so frontend always gets slidesLink/slidesPdfLink cleanly
+    const data = snap.data() || {};
+    const slidesLink = data.slidesLink || data.slides?.link || data.slides_url || null;
+    const slidesPdfLink = data.slidesPdfLink || data.slides?.pdfLink || data.slides_pdf_url || null;
+
+    return res.json({
+      reportId,
+      ...data,
+      slidesLink,
+      slidesPdfLink
+    });
+  } catch (err) {
+    console.error("[GET /api/research?reportId] error:", err);
+    return res.status(500).json({ error: "read_failed", details: err.message });
+  }
+});
 
 router.post("/", async (req, res) => {
   const rid = Math.random().toString(36).slice(2, 8); // request id for tracing

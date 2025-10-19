@@ -1,11 +1,7 @@
 // src/llm/merger.js
 // Merge per-article summaries into one final JSON for slides.
-// Requirements implemented:
-// - Minimal truncation (only high safety caps to avoid pathological lengths)
-// - EXACT slide titles: "Key Facts & Summary", "Sales Opportunities & Risks", "Questions & Next Steps"
-// - EXACTLY 3 bullets per slide (pad/derive/slice to 3)
-// - Strict JSON via response_format + AJV validation
-// - Repair pass + local fallback so summary is never null
+// Guarantees: strictly valid JSON, fixed slide titles, exactly 3 bullets per slide,
+// robust against missing fields, with clear logs on why a fallback happened.
 
 const axios = require("axios");
 const Ajv = require("ajv");
@@ -19,10 +15,10 @@ const {
   FINAL_RETRY_TOKENS,
 } = require("../config/env");
 
-// ---- Azure Chat Completions endpoint (gpt-5-mini requires temperature=1) ----
+// ---- Azure chat completions (gpt-5-mini: temperature must be 1) ----
 const CHAT_URL = `${AZURE_ENDPOINT}/openai/deployments/${AZURE_DEPLOYMENT_NAME}/chat/completions?api-version=${AZURE_API_VERSION}`;
 
-// ---- JSON schema keeps slide generator stable ----
+// ---- JSON schema enforces final shape ----
 const ajv = new Ajv({ allErrors: true, strict: false });
 const FINAL_SCHEMA = {
   type: "object",
@@ -49,14 +45,14 @@ const FINAL_SCHEMA = {
     slides: {
       type: "array",
       minItems: 3,
-      maxItems: 3, // enforce exactly 3 slides
+      maxItems: 3,
       items: {
         type: "object",
         required: ["slide_number", "slide_title", "bullet_points"],
         properties: {
           slide_number: { type: "integer" },
           slide_title: { type: "string" },
-          bullet_points: { type: "array", minItems: 3, maxItems: 3, items: { type: "string" } }, // exactly 3 bullets
+          bullet_points: { type: "array", minItems: 3, maxItems: 3, items: { type: "string" } },
         },
         additionalProperties: true,
       },
@@ -67,27 +63,32 @@ const FINAL_SCHEMA = {
 const validate = ajv.compile(FINAL_SCHEMA);
 
 // ---------------- helpers ----------------
+function isBlank(s) {
+  return !s || (typeof s === "string" && s.trim().length === 0);
+}
+
 function tryParseJson(str) {
   if (!str) return null;
   try { return JSON.parse(str); } catch {}
+  // Fallback: extract first JSON object/array substring
   const m = str.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
   if (m) { try { return JSON.parse(m[1]); } catch {} }
   return null;
 }
 
-// Light safety cap: we keep content rich; only clip absurd lengths.
+// Light safety cap to prevent pathological lengths
 function clip(str, max) {
   if (typeof str !== "string") return str;
   return str.length > max ? str.slice(0, max) + "…" : str;
 }
 
-// Build input for the merge model with VERY HIGH caps (keeps richness).
+// Build compact article objects for the merger prompt (keep generous caps)
 function buildArticlesCompact(perArticleSummaries, k) {
-  const MAX_TITLE = 2000;
-  const MAX_OLS   = 3000;  // one_line_summary
-  const MAX_SS    = 4000;  // short_summary
-  const MAX_SALES = 600;   // sales_bullet
-  const MAX_Q     = 800;   // suggested_question
+  const MAX_TITLE = 220;
+  const MAX_OLS   = 260;  // one_line_summary
+  const MAX_SS    = 520;  // short_summary
+  const MAX_SALES = 120;   // sales_bullet
+  const MAX_Q     = 140;   // suggested_question
 
   return (perArticleSummaries || [])
     .slice(0, k)
@@ -118,18 +119,21 @@ function to3Bullets(arr) {
  * - Coerce types
  * - Force slide titles to fixed set
  * - Force EXACTLY 3 bullets per slide (derive if needed)
+ * - Never index highlights without safety checks
  */
 function sanitizeMerged(companyName, obj, k = 3) {
   if (!obj || typeof obj !== "object") obj = {};
 
-  // Normalize highlights (we also derive bullets from this if missing)
-  let highlights = Array.isArray(obj.highlights) ? obj.highlights.slice(0, k).map(h => ({
-    title: String(h?.title || "").trim(),
-    url: String(h?.url || "").trim(),
-    one_line_summary: String(h?.one_line_summary || h?.short_summary || "").trim(),
-    sales_bullet: String(h?.sales_bullet || "").trim(),
-    suggested_question: String(h?.suggested_question || "").trim(),
-  })) : [];
+  // Normalize highlights to at most k items and coerce strings
+  let highlights = Array.isArray(obj.highlights)
+    ? obj.highlights.slice(0, k).map(h => ({
+        title: String(h?.title || "").trim(),
+        url: String(h?.url || "").trim(),
+        one_line_summary: String(h?.one_line_summary || h?.short_summary || "").trim(),
+        sales_bullet: String(h?.sales_bullet || "").trim(),
+        suggested_question: String(h?.suggested_question || "").trim(),
+      }))
+    : [];
 
   if (highlights.length < 1) {
     highlights = [{
@@ -155,23 +159,27 @@ function sanitizeMerged(companyName, obj, k = 3) {
   const modelSlides = Array.isArray(obj.slides) ? obj.slides.slice(0, 3) : [];
   const base = [modelSlides[0] || {}, modelSlides[1] || {}, modelSlides[2] || {}];
 
-  // Derived bullet pools used when model bullets are missing/empty
+  // Derived bullet pools (safe access with ?. and defaults)
+  const h0 = highlights[0] || {};
+  const h1 = highlights[1] || {};
+  const h2 = highlights[2] || {};
+
   const derivedFacts = [
-    highlights[0]?.one_line_summary || highlights[0]?.title || company_overview,
-  highlights[1]?.one_line_summary || highlights[1]?.title || "Key development noted",
-  highlights[2]?.one_line_summary || highlights[2]?.title || `${highlights.length} highlight(s) extracted`,
+    h0.one_line_summary || h0.title || company_overview,
+    h1.one_line_summary || h1.title || "Key development noted",
+    h2.one_line_summary || h2.title || `${highlights.length} highlight(s) extracted`,
   ];
 
   const derivedOpps = [
-    highlights[0]?.sales_bullet || "Potential opportunity—align solution & timing",
-    highlights[1]?.sales_bullet || "Assess budget/timeline window",
-    highlights[2]?.sales_bullet || "Check risk/compliance drivers",
+    h0.sales_bullet || "Potential opportunity—align solution & timing",
+    h1.sales_bullet || "Assess budget/timeline window",
+    h2.sales_bullet || "Check risk/compliance drivers",
   ];
 
   const derivedQs = [
-    highlights[0]?.suggested_question || `What impact on ${company}'s roadmap?`,
-    highlights[1]?.suggested_question || "Who are the stakeholders & decision timeline?",
-    highlights[2]?.suggested_question || "Any integration/compliance constraints?",
+    h0.suggested_question || `What impact on ${company}'s roadmap?`,
+    h1.suggested_question || "Who are the stakeholders & decision timeline?",
+    h2.suggested_question || "Any integration/compliance constraints?",
   ];
 
   const slides = [0,1,2].map(i => {
@@ -209,32 +217,36 @@ function localMergeFallback(companyName, perArticleSummaries, k = 3) {
     ? `${companyName}: ${seed}`
     : `${companyName}: recent developments with potential commercial impact.`;
 
+  const h0 = highlights[0] || {};
+  const h1 = highlights[1] || {};
+  const h2 = highlights[2] || {};
+
   const slides = [
     {
       slide_number: 1,
       slide_title: fixedSlideTitle(0),
       bullet_points: to3Bullets([
         company_overview,
-        `${highlights[1].one_line_summary}`,
-        highlights[0]?.one_line_summary || highlights[0]?.title || "Key development noted",
+        h1.one_line_summary || "Key development noted",
+        h0.one_line_summary || h0.title || "Key development noted",
       ]),
     },
     {
       slide_number: 2,
       slide_title: fixedSlideTitle(1),
       bullet_points: to3Bullets([
-        highlights[0]?.sales_bullet || "Potential opportunity—align solution & timing",
-        highlights[1]?.sales_bullet || "Assess budget/timeline window",
-        highlights[2]?.sales_bullet || "Check risk/compliance drivers",
+        h0.sales_bullet || "Potential opportunity—align solution & timing",
+        h1.sales_bullet || "Assess budget/timeline window",
+        h2.sales_bullet || "Check risk/compliance drivers",
       ]),
     },
     {
       slide_number: 3,
       slide_title: fixedSlideTitle(2),
       bullet_points: to3Bullets([
-        highlights[0]?.suggested_question || `What impact on ${companyName}'s roadmap?`,
-        highlights[1]?.suggested_question || "Who are the stakeholders & decision timeline?",
-        highlights[2]?.suggested_question || "Any integration/compliance constraints?",
+        h0.suggested_question || `What impact on ${companyName}'s roadmap?`,
+        h1.suggested_question || "Who are the stakeholders & decision timeline?",
+        h2.suggested_question || "Any integration/compliance constraints?",
       ]),
     },
   ];
@@ -262,7 +274,7 @@ async function callAzure(messages, maxTokens) {
   };
   const r = await axios.post(CHAT_URL, body, {
     headers: { "api-key": AZURE_KEY, "Content-Type": "application/json" },
-    timeout: 60000,
+    timeout: 90000, // bump a bit for larger outputs
   });
   return r.data;
 }
@@ -271,6 +283,7 @@ async function callAzure(messages, maxTokens) {
 async function mergeSummariesToFinal(companyName, perArticleSummaries, salesTopK = 3) {
   const articlesCompact = buildArticlesCompact(perArticleSummaries, salesTopK);
   const sys = unifiedPrompt || "You are a sales analysis assistant. Output strictly valid JSON. No commentary.";
+
   const usr = `
 COMPANY: ${companyName}
 
@@ -303,16 +316,27 @@ Return a single JSON object with EXACTLY these keys:
     );
 
     const content = ai?.choices?.[0]?.message?.content || "";
-    const parsed = tryParseJson(content);
-
-    if (parsed) {
-      const fixed = sanitizeMerged(companyName, parsed, salesTopK);
-      if (validate(fixed)) {
-        return { parsed: fixed, usage: ai?.usage || null, model: ai?.model || null, fallback: false };
-      }
+    if (!content) {
+      console.warn("[merger] initial: empty content from model");
+      throw new Error("empty_content");
     }
-  } catch {
-    // continue to repair
+
+    const parsed = tryParseJson(content);
+    if (!parsed) {
+      console.warn("[merger] initial: JSON parse failed");
+      throw new Error("json_parse_failed");
+    }
+
+    const fixed = sanitizeMerged(companyName, parsed, salesTopK);
+    const ok = validate(fixed);
+    if (!ok) {
+      console.warn("[merger] initial: AJV validation failed:", validate.errors);
+      throw new Error("schema_invalid");
+    }
+
+    return { parsed: fixed, usage: ai?.usage || null, model: ai?.model || null, fallback: false };
+  } catch (e) {
+    console.warn("[merger] initial attempt failed:", e.message || e);
   }
 
   // ---- Repair attempt
@@ -342,35 +366,32 @@ ${JSON.stringify(articlesCompact, null, 2)}
     );
 
     const rContent = repair?.choices?.[0]?.message?.content || "";
-    const rParsed = tryParseJson(rContent);
-
-    if (rParsed) {
-      const fixed = sanitizeMerged(companyName, rParsed, salesTopK);
-      if (validate(fixed)) {
-        return { parsed: fixed, usage: repair?.usage || null, model: repair?.model || null, fallback: false };
-        
+    if (!rContent) {
+      console.warn("[merger] repair: empty content from model");
+      const lf = localMergeFallback(companyName, perArticleSummaries, salesTopK);
+      return { parsed: lf, usage: repair?.usage || null, model: repair?.model || null, fallback: true, error: "empty_content_repair" };
     }
-      }
 
-    // If still invalid -> LOCAL FALLBACK JSON (no LLM) so summary is NOT null
-    const lf = localMergeFallback(companyName, perArticleSummaries, salesTopK);
-    return {
-      parsed: lf,
-      usage: repair?.usage || ai?.usage || null,
-      model: repair?.model || ai?.model || null,
-      fallback: true,
-      error: "merge_output_invalid_after_repair",
-    };
+    const rParsed = tryParseJson(rContent);
+    if (!rParsed) {
+      console.warn("[merger] repair: JSON parse failed");
+      const lf = localMergeFallback(companyName, perArticleSummaries, salesTopK);
+      return { parsed: lf, usage: repair?.usage || null, model: repair?.model || null, fallback: true, error: "json_parse_failed_repair" };
+    }
 
-  }catch (e) {
+    const fixed = sanitizeMerged(companyName, rParsed, salesTopK);
+    const ok = validate(fixed);
+    if (!ok) {
+      console.warn("[merger] repair: AJV validation failed:", validate.errors);
+      const lf = localMergeFallback(companyName, perArticleSummaries, salesTopK);
+      return { parsed: lf, usage: repair?.usage || null, model: repair?.model || null, fallback: true, error: "merge_output_invalid_after_repair" };
+    }
+
+    return { parsed: fixed, usage: repair?.usage || null, model: repair?.model || null, fallback: false };
+  } catch (e) {
+    console.warn("[merger] repair attempt failed:", e.message || e);
     const lf = localMergeFallback(companyName, perArticleSummaries, salesTopK);
-    return {
-      parsed: lf,
-      usage: ai?.usage || null,
-      model: ai?.model || null,
-      fallback: true,
-      error: String(e?.response?.data?.error?.message || e.message || e),
-    };
+    return { parsed: lf, usage: null, model: null, fallback: true, error: String(e?.message || e) };
   }
 }
 
