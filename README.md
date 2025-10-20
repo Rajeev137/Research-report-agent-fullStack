@@ -1,155 +1,103 @@
-# Research Report Agent (Phase 1)
+# Research Report Agent — AI-Powered Sales Intelligence Platform
 
-A mobile-ready backend that fetches company news, summarizes with a hybrid LLM pipeline, and produces a 3-slide sales brief — all cached in Firestore.
+An end-to-end AI-driven research automation tool that fetches live news on a company, summarizes insights, generates polished PPT reports, enables one-click Gmail outreach, and even schedules follow-up meetings on Google Calendar — all from a single streamlined interface.
 
-## ✅ Current Status (16 Oct 2025)
-- **Hybrid LLM pipeline** (rank → per-article summary → final merge) with clean JSON
-- **Firestore**: reports caching, token usage logs
-- **Unified prompt** integrated for consistent, high-quality final output
-- **Azure OpenAI** configuration fixed and stable
-
-## 🚀 What’s Next
-- **Google Slides generation**: create a live deck from the JSON slides and save the link
-- **Google OAuth**: one-time consent and token storage for Slides/Drive
-- **(Planned) Lightweight RAG**: ground the LLM on fetched web content/news to reduce hallucinations
-
-> Order I propose: Slides + OAuth next (user-facing win), then a minimal RAG layer (chunk + retrieve) before UI polish.
-
----
+## Features Overview
+Module																					Description
+--------------------------------------------------------------------------------------------------------------------
+AI News Research							Fetches company-related news using NewsAPI, processes articles using Azure OpenAI GPT-5 pipeline with retry logic & token optimization
+Smart Report Generation						Generates structured sales-intelligence presentations (PowerPoint) with market positioning, insights, and opportunities
+Automated Email Outreach					Sends follow-up outreach via Gmail API with generated pitch based on report context
+Calendar Scheduling							Creates Google Calendar events with selected date & attendees — logged to backend with tracking
+Firestore Integration						Stores reports, user profiles, history, and meeting logs with timestamp and latency tracking
+Frontend Mobile/Web UI						Built using React Native (Expo) with a clean UI and complete flow integration
+History & Logs								Every report generation and meeting is logged and retrievable in the History tab
 
 ## Tech Stack
-- **Node.js**, **Express**
-- **Azure OpenAI** (`gpt-5-mini`) — chat completions (`max_completion_tokens` only)
-- **Firestore** via `firebase-admin`
-- **NewsAPI** + **Google News** fallback (scrape)
-- **AJV** for JSON schema validation
+Layer												Technologies Used
+Frontend							React Native (Expo), Context API, AsyncStorage
+Backend								Node.js (Express), Firebase Firestore, Google OAuth, Google APIs (Drive, Gmail, Calendar, Slides)
+AI Layer							Azure OpenAI GPT Models with hybrid retry logic and multi-stage summarization
+Auth & OAuth						Google OAuth 2.0 with refresh token storage & validation
+Database							Firestore (reports, meetings, email logs)
+File Generation						Google Slides API & custom PPT builder
+News Aggregation					NewsAPI, multi-language support (en)
+Deployment-ready					ENV-driven configuration, modular API routes
 
----
+## Environment Variables (Backend)
 
-## Folder Structure
-src/
-app.js                # express app wiring
-server.js             # server start
-config/env.js         # env + pipeline knobs
-firestore/
-init.js             # firebase-admin init
-cache.js            # prefer exact-domain cached report
-tokenLog.js         # token usage logger
-llm/
-azureClient.js      # Azure chat wrapper + JSON parsing
-summarizer.js       # per-article summarizer (map)
-merger.js           # final merge (reduce) + repair
-schema.js           # AJV final schema
-prompts.js          # unified prompt (final merge)
-services/
-newsService.js      # NewsAPI + Google News, ranking
-webService.js       # website fetch + text extraction
-routes/
-research.js         # POST /api/research
-health.js           # GET /health
+	PORT=4000
+	HOST=127.0.0.1
+	
+	# Firebase
+	FIREBASE_SERVICE_ACCOUNT_PATH=./serviceAccountKey.json
+	
+	# NewsAPI
+	NEWSAPI_KEY=
+	NEWS_LANGUAGE=en,jp
+	
+	# Azure OpenAI
+	AZURE_ENDPOINT=
+	AZURE_KEY=
+	AZURE_DEPLOYMENT_NAME=gpt-5-mini
+	AZURE_API_VERSION=2025-04-01-preview
+	
+	# Token Strategy
+	SALES_TOP_K=3
+	PER_ARTICLE_MAX_TOKENS=800
+	FINAL_MAX_COMPLETION_TOKENS=2200
+	PER_ARTICLE_RETRY_TOKENS=400
+	FINAL_RETRY_TOKENS=900
+	
+	# Google OAuth
+	GOOGLE_CLIENT_ID=
+	GOOGLE_CLIENT_SECRET=
+	GOOGLE_REDIRECT_URI=http://127.0.0.1:4000/google/oauth2callback
+	GOOGLE_TOKEN_PATH=./google_token.json
+	GOOGLE_DRIVE_PARENT_FOLDER_ID=
+	FALLBACK_USER_EMAIL=
 
----
+## Running Locally
 
-## Setup
+	cd research-report-backend
+	npm install
+	node src/server.js
 
-### 1) Install
-```bash
-npm install
-# if not done yet:
-npm i express axios cheerio cors firebase-admin ajv dotenv
+## Frontend (Expo)
+	
+	cd research-report-frontend
+	npm install
+	npx expo start -c
+	
+	Make sure .env in frontend has:
+	EXPO_PUBLIC_API_BASE_URL=http://127.0.0.1:4000
 
-2) Environment
+## Typical Workflow
 
-Create .env:
-PORT=4000
-FIREBASE_SERVICE_ACCOUNT_PATH=./serviceAccountKey.json
+1.	Enter target company name → Generate report
+2.	AI fetches news → Summarizes → Builds PowerPoint → Saves to Firestore
+3.	From Action Bar:
+	•	Send email → Gmail API
+	•	Schedule follow-up → Google Calendar API
+4.	All actions logged in History Tab.
 
-# Azure OpenAI
-AZURE_ENDPOINT=https://<your-resource>.openai.azure.com
-AZURE_KEY=<your-azure-key>
-AZURE_DEPLOYMENT_NAME=gpt-5-mini
-AZURE_API_VERSION=2025-04-01-preview
+## Difficulties Faced
 
-# News
-NEWSAPI_KEY=<optional-but-recommended>
+•	OAuth callback issues across mobile vs localhost
+•	Expo Go networking & ngrok-based redirect URI mismatch troubleshooting
+•	Token optimization strategy to avoid Azure API overruns
+•	Async UI polling for auth completion in mobile context
+•	Handling Google APIs rate limits & event logging reliability
 
-# Pipeline knobs
-SALES_TOP_K=3
-PER_ARTICLE_MAX_TOKENS=500
-FINAL_MAX_COMPLETION_TOKENS=3000
-PER_ARTICLE_RETRY_TOKENS=128
-FINAL_RETRY_TOKENS=512
 
-Put your Firebase service account at ./serviceAccountKey.json (or update the path).
+## Credits
 
-3) Run
-node src/server.js
+Made with 🤍 by Rajeev Sharma
+With help from Azure GPT-5 API, Google Cloud APIs, and a lot of debugging.
 
-API
 
-Health
-GET /health
-→ { ok: true, ts: "..." }
 
-Research
-POST /api/research
-Body:
-{
-  "companyName": "Siemens AG",
-  "domain": "www.siemens.com",   // optional, improves website fetch & cache key
-  "force": true                  // optional; skip cache if true
-}
 
-Response (abridged):
-{
-  "cached": false,
-  "elapsedMs": 12345,
-  "report": {
-    "companyName": "Siemens AG",
-    "domainUsed": "www.siemens.com",
-    "website": "https://www.siemens.com",
-    "website_text": "....",
-    "news": [{ "title":"...", "url":"...", "relevanceScore": 7.1 }],
-    "perArticleSummaries": [
-      { "id":"...", "title":"...", "short_summary":"...", "sales_bullet":"...", "url":"..." }
-    ],
-    "summary": {
-      "company": "Siemens AG",
-      "company_overview": "...",
-      "highlights": [
-        { "id":"...", "title":"...", "url":"...", "one_line_summary":"...", "sales_bullet":"...", "suggested_question":"..." }
-      ],
-      "slides": [
-        { "slide_number":1, "slide_title":"Key Facts & Summary", "bullet_points":["..."] },
-        { "slide_number":2, "slide_title":"Sales Opportunities & Risks", "bullet_points":["..."] },
-        { "slide_number":3, "slide_title":"Questions & Next Steps", "bullet_points":["..."] }
-      ]
-    },
-    "firestoreId": "..."
-  }
-}
 
-Firestore Collections
-	•	reports: one doc per generated report (input, news, summaries, final JSON, links later)
-	•	token_logs: one doc per LLM call with usage stats
 
-RAG (Planned)
 
-Goal: reduce hallucinations and improve grounding.
-	•	Minimal plan: chunk website_text + top news pages → embed (small model) → store vectors (Pinecone or local/Chroma) → during final merge, retrieve top chunks and pass as context.
-	•	Why after Slides/Auth? Slides+OAuth deliver an immediate, visible win; RAG then improves accuracy without blocking demos.
-
-Troubleshooting
-	•	Azure error / fallback JSON
-	•	Check .env: endpoint must be like https://<name>.openai.azure.com (no trailing /openai)
-	•	AZURE_DEPLOYMENT_NAME must match your deployment name in Azure
-	•	AZURE_API_VERSION=2025-04-01-preview
-	•	Don’t send temperature for gpt-5-mini (defaults to 1)
-	•	Cache not hit
-	•	Cache prefers exact domain; pass domain consistently
-	•	Weird news
-	•	We rank with sales keywords + source freshness; tune SALES_KEYWORDS if needed
-
-License
-
-MIT
